@@ -1,0 +1,442 @@
+---
+title: "ZIC2_HPE_associated_variant_Analysis"
+author: "Kyle Drover"
+date: "2025-11-13"
+output: html_document
+---
+# Set up
+```{r setup, include=FALSE}
+.libPaths("/g/data/nm24/Overt_pheno_rlibs")
+
+if (!requireNamespace("trackViewer", quietly = TRUE)) {
+  stop("Package 'trackViewer' is required. Install it via BiocManager::install('trackViewer')")
+}
+if (!requireNamespace("GenomicRanges", quietly = TRUE)) {
+  stop("Package 'GenomicRanges' is required. Install it via BiocManager::install('GenomicRanges')")
+}
+if (!requireNamespace("IRanges", quietly = TRUE)) {
+  stop("Package 'IRanges' is required. Install it via BiocManager::install('IRanges')")
+}
+if (!requireNamespace("readxl", quietly = TRUE)) {
+  stop("Package 'readxl' is required. Install it via install.packages('readxl')")
+}
+
+library(trackViewer)
+library(GenomicRanges)
+library(IRanges)
+library(readxl)
+library(stringr)
+library(dplyr)
+library(grid)
+
+# Some functions
+
+
+```
+
+
+# Define the ZIC2 Line Diagram
+```{r}
+exon_starts <- c(99982064, 99984946, 99985323)
+exon_ends   <- c(99983139, 99985109, 99985683)
+
+gene_exons <- GRanges(
+  seqnames = rep("chr13", length(exon_starts)),
+  ranges = IRanges(start = exon_starts, end = exon_ends),
+  strand = rep("+", length(exon_starts)),
+  names=paste0("Exon ", 1:3)
+)
+
+gene_exons_gr <- GRanges(seqnames = "chr13",
+                         ranges   = IRanges(start = exon_starts, end = exon_ends))
+gene_exons_gr$feature <- "exon"
+gene_exons_gr$fill    <- "#c4bcc6"
+
+
+## Compute introns by taking the regions between successive exons
+intron_starts <- exon_ends[-length(exon_ends)] + 1
+intron_ends   <- exon_starts[-1] - 1
+gene_introns_gr <- GRanges(
+  seqnames = rep("chr13", length(intron_starts)),
+  ranges = IRanges(start = intron_starts, end = intron_ends),
+  strand = rep("+", length(intron_starts)),
+  names=paste0("Intron ", 1:2)
+)
+
+gene_introns_gr$feature <- "intron"
+gene_introns_gr$fill    <- "#00b0f0"
+
+
+UTR_starts <- c(99981784, 99985683)
+UTR_ends   <- c(99982064, 99986765)
+
+gene_UTR_gr <- GRanges(
+  seqnames = rep("chr13", length(UTR_starts)),
+  ranges = IRanges(start = UTR_starts, end = UTR_ends),
+  strand = rep("+", length(UTR_starts)),
+  names=c("5'UTR", "3'UTR")
+)
+
+
+gene_UTR_gr$feature <- "UTR"
+gene_UTR_gr$fill    <- "#6a3d9a"
+
+
+domain_starts <-c(
+  99982122,  # aa 20–23
+  99982137,  # aa 25–33
+  99982329,  # aa 89–97
+  99982740,  # aa 226–230
+  99982755,  # aa 231–239
+  99982407,  # aa 115–126
+  99982785,  # aa 241–256
+  99982836,  # aa 258–358 (exon 1)
+  99984946,  # aa 359–413 (exon 2)
+  99985323,  # aa 414–416 (exon 3)
+  99985449,  # aa 456–470  (new)
+  99985512   # aa 477–515  (new)
+)
+domain_ends <-c(
+  99982133,  # aa 20–23
+  99982163,  # aa 25–33
+  99982355,  # aa 89–97
+  99982754,  # aa 226–230
+  99982781,  # aa 231–239
+  99982442,  # aa 115–126
+  99982832,  # aa 241–256
+  99983138,  # aa 258–358 (exon 1)
+  99985109,  # aa 359–413 (exon 2)
+  99985331,  # aa 414–416 (exon 3)
+  99985493,  # aa 456–470  (new)
+  99985628   # aa 477–515  (new)
+)
+
+
+
+domains_gr <- GRanges(
+  seqnames = rep("chr13", length(domain_starts)),
+  ranges = IRanges(start = domain_starts, end = domain_ends),
+  strand = rep("+", length(domain_starts)),
+  names=c(
+    "Histidine repeat (aa 20-23)",
+    "Alanine repeat (aa 25-33)",
+    "Alanine repeat (aa 89-97)",
+    "Alanine repeat (aa 226-230)",
+    "Histidine repeat (aa 231-239)",
+    "ZOC domain (aa 115-126)",
+    "ZF-NC domain (aa 241-256)",
+    "Zinc finger (aa 258-358) – exon 1",
+    "Zinc finger (aa 359-413) – exon 2",
+    "Zinc finger (aa 414-416) – exon 3",
+    "Low complexity (aa 417-435)",
+    "Low complexity (aa 456-522)")
+)
+
+domains_gr$feature <- "Protein Domain"
+domains_gr$fill    <- c("#78697b","#78697b","#78697b","#78697b",
+                        "#78697b", "#5c64b7","#b2bccb","#c4bcc6", 
+                         "#c4bcc6", "#c4bcc6", "#78697b","#78697b")
+
+domains_gr$border <-"white"
+
+
+gene_exons_gr$height  <- domains_gr$height <- 0.046   # larger bars for exons
+gene_introns_gr$height <- gene_UTR_gr$height <- 0.008
+
+features_all <- c(gene_introns_gr, gene_exons_gr, gene_UTR_gr, domains_gr)
+
+features_all$border <-"white"
+
+```
+
+# FIRST PLOT, ALL ZIC2 variants (including literature and ClinVar) with variant consequences similar to Barratt and Arkell 2018. 
+
+```{r}
+
+# read file and filter non-interesting variants
+variants <- read_xlsx("Clinvar_plus_Literature_ZIC2_final_SPDI_v4.xlsx") %>% 
+  filter(`Molecular consequence` != "synonymous variant") %>% 
+  filter(`Molecular consequence` != "intron variant")
+
+# Gets the genome co-ordinates, as the lolliplot only handles SNV data by default, 
+# you need to take the starting positions as the co-ordinates
+extract_positions <- function(co_ord) {
+  # handle missing/NA
+  if (is.na(co_ord)) return(NA_integer_)
+  # ensure it's a character
+  co_ord <- as.character(co_ord)
+  # if it looks like a range
+  if (grepl("-", co_ord)) {
+    # indels etc. 
+    parts <- strsplit(co_ord, " - ")[[1]]
+    start <- as.numeric(parts[1])
+    end   <- as.numeric(parts[1])
+  } else {
+    start <- as.numeric(co_ord)
+    end   <- as.numeric(co_ord)
+  }
+  
+  return(c(start, end))
+}
+
+variant_positions_list <- lapply(variants[["GRCh38Location"]], extract_positions)
+
+variant_positions <- do.call(rbind, variant_positions_list)
+
+
+# converts to GRanges object required for rtracklayer lolliplot, fixes the variants name
+variants_gr <- GRanges(seqnames = "chr13",
+                       ranges   = IRanges(start = variant_positions[,1],
+                                          end   = variant_positions[,2]),
+                       names = gsub("^NM_007129\\.5\\(ZIC2\\):", "", variants$Name))
+
+
+## Define shapes, border and colours according to the legend, the map is a list of named lists with the
+## consequence type and desired properties
+consequence_map <- list(
+  "missense variant|initiator_codon_variant" = list(shape = "circle", fill = "#6a3d9a", col = "#34497d"), 
+  "splice acceptor variant" = list(shape = "circle", fill = "#00b0f0", col = "#0070c0"),   # circle filled
+  "splice donor variant" = list(shape = "circle", fill = "#00b0f0", col = "#0070c0"),   # circle filled
+  "SNV"            = list(shape = "triangle_point_down", fill = "#7030a0", col = "#34497d"),
+  "no sequence alteration"= list(shape = "diamond", fill = "#00b0f0", col = "#34497d"),   # filled triangle up
+  "missense variant"= list(shape = "circle", fill = "#92D050", col = "#0070c0"), # open circle
+  "nonsense"       = list(shape = "triangle_point_down", fill = "#00b0f0",col = "#34497d"),   # triangle down
+  "stop_gained"       = list(shape = "triangle_point_down", fill = "#00b0f0",col = "#34497d"),   # triangle down
+  "stop_lost"       = list(shape = "triangle_point_down", fill = "#00b0f0",col = "#34497d"),   # triangle down
+  "frameshift variant"     = list(shape = "square", fill = "#33a02c", col = "#34497d"),   # square
+  "Deletion"       = list(shape = "diamond", fill = "#6a3d9a", col = "#34497d"),   # diamond
+  "inframe_deletion"       = list(shape = "diamond", fill = "#6a3d9a", col = "#34497d"),   # diamond
+  "inframe_indel"       = list(shape = "diamond",  fill = "#92D050", col = "#0070c0"),   # diamond
+  "Duplication"    = list(shape = "diamond", fill = "#00b0f0", col = "#34497d"),   # diamond (different colour)
+  "Insertion"      = list(shape = "triangle_point_up", fill = "#0070c0", col = "#34497d"),    # triangle up
+  "inframe_insertion" = list(shape = "triangle_point_up", fill = "#0070c0", col = "#34497d"),
+  "3 prime UTR variant" = list(shape = "triangle_point_down", fill = "#7030a0", col = "#34497d"),
+  "stop_gained,frameshift variant"=list(shape = "triangle_point_down", fill = "#00b0f0",col = "#34497d")
+)
+
+# adds the shape, colour and border of each variant depending on its consequences (includes defaults)
+variants_gr$shape <- sapply(variants$`Molecular consequence`, function(mc) {
+  if (!is.null(consequence_map[[mc]])) consequence_map[[mc]]$shape else "circle"
+})
+variants_gr$color <- sapply(variants$`Molecular consequence`, function(mc) {
+  if (!is.null(consequence_map[[mc]])) consequence_map[[mc]]$fill else "white"
+})
+
+variants_gr$border <- sapply(variants$`Molecular consequence`, function(mc) {
+  if (!is.null(consequence_map[[mc]])) consequence_map[[mc]]$col else "grey50"
+})
+
+# All this is doing is randomly jittering the variants vertically 
+# and then rescaling the values between 0.6-1.2 so it looks good on the plot
+variants_gr$score <- scales::rescale(sample.int(3, length(variants_gr), replace = TRUE), to=c(0.6,1.2))
+
+# Variants from literature are the bottom and vairants from Clinvar are on top
+variants_gr$SNPsideID <- ifelse(variants$Source=="Lit", "bottom","top")
+
+
+## don't try to store label.parameter on the GRanges; remove junk metadata
+mcols(variants_gr)$label.parameter.rot <- NULL
+
+## show labels on SNPs (not on features), rotate for readability
+lab_par <- list(label_on_feature = FALSE, rot = 45, cex = 0.7)
+
+
+## ---------------------------------------------------------------------
+## Plotting.  We create a lollipop plot for the mRNA and overlay the
+## domain annotations.  Below the protein track we add the gene model
+## showing exons (black boxes) and introns (lines).  The height and
+## style of each track can be adjusted via the 'height' argument.
+
+# given the size, its better to save it as a png (you can left-click open the file in Rstudio)
+png("ZIC2_lollipop_plot.png", width = 11500, height = 3000, res=300) 
+#png("ZIC2_lollipop_plot.png", width = 6000, height = 1000, res = 300) 
+op <- par(mar = c(0, 0, 0, 0))  # bottom, left, top, right
+lolliplot(
+  variants_gr,
+  features_all,
+  type="circle",
+  yaxis.gp = gpar(col = "black"),
+  xlab = "chr13 (GRCh38)",
+  #yaxis = yaxis,
+  cex = 0.7,
+  legend = TRUE, 
+  jitter="node",
+  lollipop_style_switch_limit=1, # stops plotting multiple circles
+  label.parameter = list(label_on_feature = FALSE, rot = 45, cex = 0.7),
+  box = TRUE
+)
+par(op)
+dev.off()
+
+message("Lollipop plot saved to ZIC2_lollipop_plot.pdf")
+```
+
+# SECOND PLOT only Missense variants and pie-chart for predictions
+
+```{r}
+#reads and filters for missense variant
+df <- readr::read_csv("literature_Clinvar_ZIC2_missense_simp.csv", show_col_types = FALSE) %>% filter(grepl("missense_variant", Consequence))
+
+# The formatting of co-ords is weird in this file, this fixes it
+parse_loc <- function(x) {
+  x <- as.character(x)
+  out <- matrix(NA_real_, nrow=length(x), ncol=2,
+                dimnames=list(NULL, c("start","end")))
+  ok <- !is.na(x) & nzchar(x)
+  if (any(ok)) {
+    m <- stringr::str_match(x[ok], "^[^:]+:(\\d+)-(\\d+)$")
+    out[ok, "start"] <- as.numeric(m[,2])
+    out[ok, "end"]   <- as.numeric(m[,3])
+  }
+  out
+}
+coords <- parse_loc(df$Location)
+
+#same as above
+variants_gr <- GRanges(
+  seqnames = "chr13",
+  ranges   = IRanges(start = coords[,"start"], end = coords[,"start"])
+)
+
+## Label names: ONLY remove the ENSP prefix
+names(variants_gr) <- gsub("^ENSP00000365514\\.3:", "", df$HGVSp)
+
+## Threshold rules (customisable)
+thresholds <- list(
+  SIFT = list(type="paren_prob",
+              del = function(s) !is.na(s) & s <= 0.05,
+              ben = function(s) !is.na(s) & s >  0.05),
+  PolyPhen = list(type="paren_prob",
+                  del = function(s) !is.na(s) & s >= 0.446,
+                  ben = function(s) !is.na(s) & s <  0.446),
+  REVEL = list(type="plain_num",
+               del = function(s) !is.na(s) & s >= 0.50,
+               ben = function(s) !is.na(s) & s <  0.50),
+  am_pathogenicity = list(type="plain_num",  # AlphaMissense probability
+                          del = function(s) !is.na(s) & s >= 0.56,
+                          ben = function(s) !is.na(s) & s <= 0.34,
+                          note = "0.34–0.56 ambiguous → N/A"),
+  CADD_PHRED = list(type="plain_num",
+                    del = function(s) !is.na(s) & s >= 20,
+                    ben = function(s) !is.na(s) & s <  20),
+  ClinPred = list(type="plain_num",
+                  del = function(s) !is.na(s) & s >= 0.50,
+                  ben = function(s) !is.na(s) & s <  0.50)
+  
+)
+
+# random utility functions to handle and extract scores whether the score contains brackets 
+num_in_paren <- function(x) {
+  x <- as.character(x)
+  suppressWarnings(as.numeric(stringr::str_match(x, "\\(([-+]?[0-9]*\\.?[0-9]+)\\)")[,2]))
+}
+to_num <- function(x) {
+  x <- as.character(x)
+  x[x %in% c("", "-", "NA", "NaN")] <- NA_character_
+  suppressWarnings(as.numeric(x))
+}
+
+extract_scores <- function(df, pred) {
+  typ <- thresholds[[pred]]$type
+  if (typ == "paren_prob") {
+    num_in_paren(df[[pred]])
+  } else if (typ == "plain_num") {
+    to_num(df[[pred]])
+  } else if (typ == "binary") {
+    as.character(df[[pred]])
+  } else stop("Unknown type for ", pred)
+}
+
+classify_vec <- function(scores, pred) {
+  rule <- thresholds[[pred]]
+  typ  <- rule$type
+  if (typ %in% c("paren_prob","plain_num")) {
+    del <- rule$del(scores)
+    ben <- rule$ben(scores)
+    out <- ifelse(del, "deleterious", ifelse(ben, "benign", "N/A"))
+  } else stop("Unknown type for ", pred)
+  factor(out, levels=c("deleterious","benign","N/A"))
+}
+
+predictors <- intersect(names(thresholds), names(df))
+
+if (!length(predictors)) stop("No known prediction columns found.")
+
+## Make a classification table: one row per variant x predictor
+cls_long <- lapply(predictors, function(p) {
+  sc <- extract_scores(df, p)
+  tibble(
+    idx = seq_len(nrow(df)),
+    predictor = p,
+    class = classify_vec(sc, p)
+  )
+}) %>% bind_rows()
+
+# counts for deleterious vs non-deleterious variants at each prediction
+counts <- cls_long %>%
+  group_by(idx) %>%
+  summarise(
+    value1 = sum(class == "deleterious", na.rm = TRUE),        # # deleterious
+    value2 = sum(class != "deleterious", na.rm = TRUE),        # # benign + N/A
+    .groups="drop"
+  )
+
+## Attach to variants_gr
+variants_gr$value1 <- counts$value1
+variants_gr$value2 <- counts$value2
+
+## Two-slice pie colors per variant (must be a list of length 2)
+## red = deleterious slice; blue/grey = benign+N/A slice
+variants_gr$color  <- rep(list(c("#d62728", "#6c93c3")), length(variants_gr))
+variants_gr$border <- "gray30"
+
+variants_gr$SNPsideID <- sample(c("top", "bottom"), 
+                              length(variants_gr),
+                              replace=TRUE)
+
+legend_pie <- list(labels=c("Deleterious","Benign/N/A"),
+                   fill=c("#d62728","#6c93c3"))
+
+png("ZIC2_pie_lolliplot_allPredictors.png", width = 11500, height = 3000, res=300)
+op <- par(mar=c(0,0,0,0))
+lolliplot(
+  variants_gr,
+  features_all,
+  type = "pie",
+  legend = legend_pie,
+  yaxis.gp = gpar(col="black"),
+  xlab = "chr13 (GRCh38)",
+  cex = 0.7,
+  jitter = "node",
+  lollipop_style_switch_limit = 1,
+  label.parameter = list(label_on_feature = FALSE, rot = 45, cex = 0.7),
+  box = TRUE
+)
+par(op); dev.off()
+message("Wrote: ZIC2_pie_lolliplot_allPredictors.png")
+
+```
+
+## Stats for ZIC2 Missense Variants
+
+```{r}
+summary_by_pred <- cls_long %>%
+  count(predictor, class) %>%
+  group_by(predictor) %>%
+  mutate(total = sum(n), prop = n/total) %>%
+  ungroup()
+print(summary_by_pred)
+
+
+# Greater than 60% deleterious
+n_majority <- sum((counts$value1)/(counts$value1+counts$value2) > 0.6)
+
+# Total number of variants
+n_total <- nrow(counts)
+
+# Percentage
+perc_majority <- (n_majority / n_total) * 100
+
+print(paste("Percentage of SNPs which have majority deleterious predictions", perc_majority))
+
+```
