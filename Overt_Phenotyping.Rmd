@@ -1,0 +1,389 @@
+---
+title: "testing_overt_phenotyping_stats"
+author: "Kyle Drover"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+.libPaths("/g/data/nm24/Overt_pheno_rlibs")
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyr)
+library(tidyverse)
+library(gmodels)
+library(ggplot2)
+library(readr)
+library(MASS)
+library(dplyr)
+library(cowplot)
+library(gridExtra)
+library(catboost)
+library(ggdark)
+library(reshape2)
+library(ComplexHeatmap)
+#library(caret)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r}
+
+#Set up some cool functions
+variable_names <- list(
+  "WT" = expression(bolditalic("Zic2")^bolditalic("+/+")),
+  "HET" = expression(bolditalic("Zic2")^bolditalic("Ku/+"))
+)
+
+variable_labeller <- function(variable,value){return(variable_names[value])}
+
+back_names <- list(
+  "C3H" = "C3H/HeH",
+  "C57BL6" = "C57BL/6N",
+  "F1"= "C3H/HeH:C57BL/6N F1"
+)
+
+back_labeller <- function(variable,value){return(back_names[value])}
+
+pheno_names <- list(
+  "Anophthalmia" = expression(bold("Anophthalmia")), 
+  "Curly_Tail" = expression(bold("Curly Tail")), 
+  "Microphthalmia" = expression(bold("Microphthalmia")),
+  "Other_Tail_Abnormalities" = expression(bold("Other Tail Abnormalities")),
+  "Smooth_Pointed_Philtrum" = expression(bold("Smooth Pointed Philtrum")),
+  "Spina_Bifida" = expression(bold("Spina Bifida")), 
+  "Side_if_Microphthalmia_or_anophthalmia" = expression(bold("Side of Eye Defect if Present")),
+  "HPE" = expression(bold("Holopresencephaly"), 
+  "C3H" = "C3H/HeH",
+  "C57BL6" = "C57BL/6N",
+  "F1"= "C3H/HeH:C57BL/6N F1")
+)
+
+pheno_labeller <- function(variable,value){return(pheno_names[value])}
+
+geno_pheno <- expand.grid(variable_names, pheno_names)
+
+geno_pheno_labeller <- function(variable,value1,value2){return(geno_pheno[value1, value2])}
+
+
+geno_back_pheno <- expand.grid(back_names,variable_names, pheno_names)
+
+
+
+geno_back_pheno_labeller <- function(variable,value1,value2,value3){return(geno_back_pheno[value1, value2])}
+
+
+geno_back_pheno_names <- list(
+"C3H.WT.Anophthalmia" = expression(bolditalic("Zic2")^bolditalic("+/+")~bold("C3H/HeH Anophthalmia")),
+  "C57BL6.WT.Anophthalmia" = expression(bolditalic("Zic2")^bolditalic("+/+")~bold("C57BL/6N Anophthalmia")),
+  "F1.WT.Anophthalmia" = expression(bolditalic("Zic2")^bolditalic("+/+")~bold("F1 Anophthalmia")),
+  "C3H.HET.Anophthalmia" = expression(bolditalic("Zic2")^bolditalic("Ku/+")~bold("C3H/HeH Anophthalmia")),
+  "C57BL6.HET.Anophthalmia" = expression(bolditalic("Zic2")^bolditalic("Ku/+")~bold("C57BL/6N Anophthalmia")),
+  "F1.HET.Anophthalmia" = expression(bolditalic("Zic2")^bolditalic("Ku/+")~bold("F1 Anophthalmia")),
+  "C3H.WT.Microphthalmia" = expression(bolditalic("Zic2")^bolditalic("+/+")~bold("C3H/HeH Microphthalmia")),
+  "C57BL6.WT.Microphthalmia" = expression(bolditalic("Zic2")^bolditalic("+/+")~bold("C57BL/6N Microphthalmia")),
+  "F1.WT.Microphthalmia" = expression(bolditalic("Zic2")^bolditalic("+/+")~bold("F1 Microphthalmia")),
+  "C3H.HET.Microphthalmia" = expression(bolditalic("Zic2")^bolditalic("Ku/+")~bold("C3H/HeH Microphthalmia")),
+  "C57BL6.HET.Microphthalmia" = expression(bolditalic("Zic2")^bolditalic("Ku/+")~bold("C57BL/6N Microphthalmia")),
+  "F1.HET.Microphthalmia" = expression(bolditalic("Zic2")^bolditalic("Ku/+")~bold("F1 Microphthalmia")),
+  "C3H.WT.Curly_Tail" = expression(bolditalic("Zic2")^bolditalic("+/+")~bold("C3H/HeH Curly Tail")),
+  "C57BL6.WT.Curly_Tail" = expression(bolditalic("Zic2")^bolditalic("+/+")~bold("C57BL/6N Curly Tail")),
+  "F1.WT.Curly_Tail" = expression(bolditalic("Zic2")^bolditalic("+/+")~bold("F1 Curly Tail")),
+  "C3H.HET.Curly_Tail" = expression(bolditalic("Zic2")^bolditalic("Ku/+")~bold("C3H/HeH Curly Tail")),
+  "C57BL6.HET.Curly_Tail" = expression(bolditalic("Zic2")^bolditalic("Ku/+")~bold("C57BL/6N Curly Tail")),
+  "F1.HET.Curly_Tail" = expression(bolditalic("Zic2")^bolditalic("Ku/+")~bold("F1 Curly Tail")),
+  "C3H.WT.Smooth_Pointed_Philtrum" = expression(bolditalic("Zic2")^bolditalic("+/+")~bold("C3H/HeH Smooth Pointed Philtrum")),
+  "C57BL6.WT.Smooth_Pointed_Philtrum" = expression(bolditalic("Zic2")^bolditalic("+/+")~bold("C57BL/6N Smooth Pointed Philtrum")),
+  "F1.WT.Smooth_Pointed_Philtrum" = expression(bolditalic("Zic2")^bolditalic("+/+")~bold("F1 Smooth Pointed Philtrum")),
+  "C3H.HET.Smooth_Pointed_Philtrum" = expression(bolditalic("Zic2")^bolditalic("Ku/+")~bold("C3H/HEH Smooth_Pointed Philtrum")),
+  "C57BL6.HET.Smooth_Pointed_Philtrum" = expression(bolditalic("Zic2")^bolditalic("Ku/+")~bold("C57BL/6N Smooth_Pointed Philtrum")),
+  "F1.HET.Smooth_Pointed_Philtrum" = expression(bolditalic("Zic2")^bolditalic("Ku/+")~bold("F1 Smooth_Pointed Philtrum")),
+  "C3H.WT.Other_Tail_Abnormalities" = expression(bolditalic("Zic2")^bolditalic("+/+")~bold("C3H/HeH Other Tail Abnormalities")),
+  "C57BL6.WT.Other_Tail_Abnormalities" = expression(bolditalic("Zic2")^bolditalic("+/+")~bold("C57BL/6N Other Tail Abnormalities")),
+  "F1.WT.Other_Tail_Abnormalities" = expression(bolditalic("Zic2")^bolditalic("+/+")~bold("F1 Other Tail Abnormalities")),
+  "C3H.HET.Other_Tail_Abnormalities" = expression(bolditalic("Zic2")^bolditalic("Ku/+")~bold("C3H/HeH Other Tail Abnormalities")),
+  "C57BL6.HET.Other_Tail_Abnormalities" = expression(bolditalic("Zic2")^bolditalic("Ku/+")~bold("C57BL/6N Other Tail Abnormalities")),
+  "F1.HET.Other_Tail_Abnormalities" = expression(bolditalic("Zic2")^bolditalic("Ku/+")~bold("F1 Other Tail Abnormalities")),
+  "C3H.WT.Spina_Bifida" = expression(bolditalic("Zic2")^bolditalic("+/+")~bold("C3H/HeH Spina Bifida")),
+  "C57BL6.WT.Spina_Bifida" = expression(bolditalic("Zic2")^bolditalic("+/+")~bold("C57BL/6N Spina Bifida")),
+  "F1.WT.Spina_Bifida" = expression(bolditalic("Zic2")^bolditalic("+/+")~bold("F1 Spina Bifida")),
+  "C3H.HET.Spina_Bifida" = expression(bolditalic("Zic2")^bolditalic("Ku/+")~bold("C3H/HeH Spina Bifida")),
+  "C57BL6.HET.Spina_Bifida" = expression(bolditalic("Zic2")^bolditalic("Ku/+")~bold("C57BL/6N Spina Bifida")),
+  "F1.HET.Spina_Bifida" = expression(bolditalic("Zic2")^bolditalic("Ku/+")~bold("F1 Spina Bifida")),
+  "C3H.WT.HPE" = expression(bolditalic("Zic2")^bolditalic("+/+")~bold("C3H/HeH HPE")),
+  "C57BL6.WT.HPE" = expression(bolditalic("Zic2")^bolditalic("+/+")~bold("C57BL/6N HPE")),
+  "F1.WT.HPE" = expression(bolditalic("Zic2")^bolditalic("+/+")~bold("F1 HPE")),
+  "C3H.HET.HPE" = expression(bolditalic("Zic2")^bolditalic("Ku/+")~bold("C3H/HeH HPE")),
+  "C57BL6.HET.HPE" = expression(bolditalic("Zic2")^bolditalic("Ku/+")~bold("C57BL/6N HPE")),
+  "F1.HET.HPE" = expression(bolditalic("Zic2")^bolditalic("Ku/+")~bold("F1 HPE")),
+  "C3H.WT.Side_if_Microphthalmia_or_anophthalmia" = expression(bolditalic("Zic2")^bolditalic("+/+")~bold("C3H/HeH Side of Eye Defect if Present")),
+  "C57BL6.WT.Side_if_Microphthalmia_or_anophthalmia" = expression(bolditalic("Zic2")^bolditalic("+/+")~bold("C57BL/6N Side of Eye Defect if Present")),
+  "F1.WT.Side_if_Microphthalmia_or_anophthalmia" = expression(bolditalic("Zic2")^bolditalic("+/+")~bold("F1 Side of Eye Defect if Present")),
+  "C3H.HET.Side_if_Microphthalmia_or_anophthalmia" = expression(bolditalic("Zic2")^bolditalic("Ku/+")~bold("C3H/HeH Side of Eye Defect if Present")),
+  "C57BL6.HET.Side_if_Microphthalmia_or_anophthalmia" = expression(bolditalic("Zic2")^bolditalic("Ku/+")~bold("C57BL/6N Side of Eye Defect if Present")),
+  "F1.HET.Side_if_Microphthalmia_or_anophthalmia" = expression(bolditalic("Zic2")^bolditalic("Ku/+")~bold("F1 Side of Eye Defect if Present"))
+)
+
+
+
+
+#Just d
+
+#This is the only way to call to make it work!
+inter_names <- list(
+  "WT.C3H" = expression(bolditalic("Zic2")^bolditalic("+/+")~bold("C3H/HeH")),
+  "WT.F1" = expression(bolditalic("Zic2")^bolditalic("+/+")~bold("C3H/HeH:C57BL/6N F1")),
+  "WT.C57BL6" = expression(bolditalic("Zic2")^bolditalic("+/+")~bold("C57BL/6N")),
+  "HET.C3H" = expression(bolditalic("Zic2")^bolditalic("Ku/+")~bold("C3H/HeH")),
+  "HET.F1" = expression(bolditalic("Zic2")^bolditalic("Ku/+")~bold("C3H/HeH:C57BL/6N F1")),
+  "HET.C57BL6" = expression(bolditalic("Zic2")^bolditalic("Ku/+")~bold("C57BL/6N")) 
+  
+)
+
+
+inter_names2 <- list(
+  "C3H.WT" = expression(bolditalic("Zic2")^bolditalic("+/+")~bold("C3H/HeH")),
+  "F1.WT" = expression(bolditalic("Zic2")^bolditalic("+/+")~bold("C3H/HeH:C57BL/6N F1")),
+  "C57BL6.WT" = expression(bolditalic("Zic2")^bolditalic("+/+")~bold("C57BL/6N")),
+  "C3H.HET" = expression(bolditalic("Zic2")^bolditalic("Ku/+")~bold("C3H/HeH")),
+  "F1.HET" = expression(bolditalic("Zic2")^bolditalic("Ku/+")~bold("C3H/HeH:C57BL/6N F1")),
+  "C57BL6.HET" = expression(bolditalic("Zic2")^bolditalic("Ku/+")~bold("C57BL/6N")) 
+  
+)
+```
+
+## Graphs
+
+File loaded and factorising
+```{r}
+
+# read csv files
+overt_phenotypes <- read_csv("240613_overt_phenotyping_with_staging_AP.csv")
+
+# overt_phenotypes_Am <- read_csv("240207_overt_phenotyping.csv")
+# 
+# overt_pheno_merged <- merge(overt_phenotypes_Am, overt_phenotypes, all.x = T, by = 'Embryo')
+# 
+# overt_pheno_merged
+# 
+# write.csv(overt_pheno_merged, "fixed_overt_phenotyping.csv")
+
+  
+```
+
+```{r}
+
+overt_phenotypes <- arrange(transform(overt_phenotypes, Genotype=factor(Genotype,levels=c("WT","HET")))) 
+
+overt_phenotypes <- arrange(transform(overt_phenotypes, Background=factor(Background,levels=c("C3H","F1", "C57BL6"))))
+
+overt_phenotypes <- overt_phenotypes %>% mutate(Combined_Philtrum=ifelse(Smooth_Pointed_Philtrum=="Y"|Mild_Pointed_Philtrum=="Y", "Y", "N"),
+                                                Combined_Opthalmia=ifelse(Anophthalmia=="Y"|Microphthalmia=="Y", "Y", "N"),
+                                                Obviously_Munted=ifelse(Smooth_Pointed_Philtrum=="Y"|Cyclopia=="Y"|Anterior_Truncation=="Y", "Y", "N"))
+
+#Factorise my binary values
+
+cols <- colnames(overt_phenotypes[4:19])
+
+overt_phenotypes[cols] <- lapply(overt_phenotypes[cols], factor)
+
+overt_phenotypes
+```
+
+
+So this takes all of the phenotype columns and calculates percentages (per phenotype)
+```{r}
+# init dataframe
+percent.data <- data.frame()
+
+# overt pbenotype columns
+for (ph in c(4,5,7,8,9,10,11,12,13,14,15,17,18,19)){
+  percents <- overt_phenotypes[c(2,3,ph)] %>% 
+    # group by gene-gentic background
+    group_by(Genotype,Background) %>%
+    # count creates a column n
+    count(overt_phenotypes[colnames(overt_phenotypes[ph])]) %>%
+    na.omit() %>%
+    # percentage
+    mutate(Percent=n/sum(n, na.rm = T)*100, totals = sum(n, na.rm = T)) %>%
+    # drop n column
+    dplyr::select(-4)
+  # bind to total dataset (unless its the first value)
+  if (ph == 4){percent.data <- percents}
+  else{percent.data <- merge(percent.data, percents, all.x = T, all.y = T)}
+  
+}
+
+percent.F1 <- percent.data %>% gather(key = Phenotype, value = value, na.rm = T, 
+                                        c("Spina_Bifida", "Combined_Philtrum", "Cyclopia","Combined_Opthalmia",
+                                          "Curly_Tail"))
+
+
+percent.F1 <- arrange(transform(percent.F1, Phenotype=factor(Phenotype,levels=c("Combined_Philtrum","Cyclopia", "Combined_Opthalmia", "Spina_Bifida", "Curly_Tail"))))
+
+
+# Gather into two columns (phenotype and percent)
+percent.data <- percent.data %>% gather(key = Phenotype, value = value, na.rm = T, 
+                                        c("Spina_Bifida", "Smooth_Pointed_Philtrum", "Cyclopia","Combined_Opthalmia",
+                                          "Mild_Pointed_Philtrum", ))
+
+
+percent.data <- arrange(transform(percent.data, Phenotype=factor(Phenotype,levels=c("Smooth_Pointed_Philtrum", "Mild_Pointed_Philtrum","Cyclopia", "Combined_Opthalmia", "Spina_Bifida"))))
+
+
+
+
+
+
+
+percent.data
+```
+Plotting
+
+```{r fig.width=15,fig.height=6.5}
+
+
+# uncomment to pdf and dev.off to make a pdf
+#pdf("Figure_6.pdf", onefile = T, paper="a4", width=10, height=13)
+
+# interaction is a function that combines two conditions. 
+# x to get gene-genetic background combs, fill is to get the presence / absence slightly different colours for the backgrounds
+ggplot(percent.data, aes(x=Genotype,y=Percent, fill=interaction(Background,value)))+
+  geom_col(width = 0.9)+
+  scale_x_discrete(name="", limits=rev, labels=unlist(variable_names))+
+  # rotates the plot 90 degrees
+  coord_flip()+
+  # plots each phenotype into separate panels
+  facet_grid(rows = vars(Background), cols = vars(Phenotype), shrink = F)+
+  scale_fill_manual(name="", limits=c("C3H.N","C57BL6.N","F1.N", "C3H.Y", "C57BL6.Y", "F1.Y"), 
+                    labels=c("C3H/HeH Background: \nPhenotype Absent",
+                             "C57BL/6N Background: \nPhenotype Absent",
+                             "F1 Background: \nPhenotype Absent",
+                             "C3H/HeH Background: \nPhenotype Present",
+                             "C57BL/6N Background: \nPhenotype Present",
+                             "F1 Background: \nPhenotype Present"),
+                    values = c("#d16163",  "#d16196", "#ba005e", 
+                               "#61aed1", "#618dd1", "#0074ba"), guide=guide_legend(ncol=2))+
+  ylab(expression(bold("Percentage(%)")))+
+  geom_text(aes(label = ifelse(Phenotype=="Spina_Bifida", paste("n=", totals, sep=""), ""), y=86), size = 4)+
+  geom_text(aes(label = ifelse(Percent>0&Percent<15, paste(round(Percent, 1), "%", sep=""), ""), y=10), position = position_stack(vjust = 1.2), size = 4)+
+  theme(legend.position = "none", legend.text = element_text(size=12), legend.direction = "vertical", 
+        strip.background = element_rect(fill="white", colour = "white", size=0.1),
+        strip.text.x = element_text(color = "black", size=14), legend.key.size = unit(1, 'cm'),
+        strip.text.y = element_text(angle = 0, size=14), 
+        strip.text=element_text(color="black", size=20),
+        axis.text=element_text(size=14),
+        axis.title=element_text(size=14),
+        axis.title.x = element_text(size=14,margin=margin(t=20)))
+  
+
+
+#dev.off()
+```
+```{r fig.width=5.6,fig.height=4}
+# Separate F1 figure 
+
+F1_data <- percent.F1 %>% filter(Background =="F1")
+
+
+ggplot(F1_data, aes(x=Genotype,y=Percent, fill=interaction(Background,value)))+
+  geom_col(width = 0.9)+
+  scale_x_discrete(name="", limits=rev, labels=unlist(variable_names))+
+  # rotates the plot 90 degrees
+  coord_flip()+
+  # plots each phenotype into separate panels
+  facet_wrap(vars(Phenotype), ncol=3)+
+  scale_fill_manual(name="", limits=c("F1.N", "F1.Y"), 
+                    labels=c("Phenotype\nAbsent",
+                             "Phenotype\nPresent"),
+                    values = c("#d16196", "#618dd1"), guide=guide_legend(ncol=1))+
+  ylab(expression(bold("Percentage(%)")))+
+  geom_text(aes(label = ifelse(Phenotype=="Curly_Tail", paste("n=", totals, sep=""), ""), y=86), size = 4)+
+  geom_text(aes(label = ifelse(Percent>0&Percent<15, paste(round(Percent, 1), "%", sep=""), ""), y=15), position = position_stack(vjust = 1.2), size = 4)+
+  theme(legend.position = "none",legend.text = element_text(size=10), legend.direction = "vertical", 
+        strip.background = element_rect(fill="white", colour = "white", size=0.1), 
+        strip.text.x = element_text(color = "black", size=14), legend.key.size = unit(0.3, 'cm'),
+        strip.text.y = element_text(angle = 0, size=14), 
+        strip.text=element_text(color="black", size=20),
+        panel.spacing.x = unit(0.7, "lines"),
+        axis.text=element_text(size=12),
+        axis.title=element_text(size=14),
+        axis.title.x = element_text(size=14,margin=margin(t=20)))
+
+
+```
+
+
+
+
+
+Calculate the percentages for combinations of phenotypes
+
+```{r}
+# similar to above but easier as you dont need to loop through each pehnotype
+pheno_percent <- na.omit(overt_phenotypes[1:18]) %>%
+  group_by(Genotype,Background) %>%
+  count(Microphthalmia, Anophthalmia, Curly_Tail, Smooth_Pointed_Philtrum, HPE, Other_Tail_Abnormalities, Spina_Bifida, na.rm=T) %>%
+  mutate(sum=sum(n), percent=(n)/sum*100)
+pheno_percent
+
+```
+## Statistics
+
+Basically pairwise Fisher tests to compare if the presence / absence of phenotypes are correlation to either:
+i) a genotype (i.e. wt C3H/HeH vs het C3H/HeH)
+ii) a background (i.e. wt C3H/HeH vs wt C57BL/6N)
+iii) finally we can conclude a gene-genetic background interaction if i) and ii) is non-significant but
+     wt C57BL/6N vs het C57BL/6N is significant
+
+```{r}
+# just create an empty vector
+p_values <- c()
+
+# so lets code this a bit better
+for (overt_i in (c(4:15,17:19))){
+  print(colnames(overt_phenotypes[overt_i]))
+  for (effect in (1:3)){
+    if (effect == 1) {
+      print("Doing genotype effect")
+      data <- overt_phenotypes[c(2,3,overt_i)]  %>% filter(Background == 'C3H')}
+    else if (effect == 2) {
+      print("doing background effect")
+      data <-  overt_phenotypes[c(2,3,overt_i)] %>% filter(Genotype == 'WT')}
+    else{
+      print("Doing interaction effect")
+      data <- overt_phenotypes[c(2,3,overt_i)]  %>% filter(Background == 'C57BL6')}
+  
+    
+    data <- droplevels(data)
+    
+    tab <- ftable(data, row.vars = c(1,2), col.vars = 3)
+    print(tab)
+    
+    if (ncol(tab) > 1){
+      print(fisher.test(tab))
+      p_values <- append(p_values, fisher.test(tab)$p.value)
+    } else {
+      print("No comparison can be made")
+      p_values <- append(p_values, NaN)}
+    
+  }
+}
+
+  #fdr correct pvale
+# so don't do the interaction other tail abnormalities as their is a background effect
+p_values[18] <- NaN
+
+q_vals <- p.adjust(p_values, method="BH")
+print (q_vals)
+
+results <- data.frame(matrix(q_vals, nrow = 3, byrow = F))
+
+colnames(results) <- colnames(overt_phenotypes[c(4:15,17:19)])
+
+rownames(results) <- c("genotype", "background", "interaction")
+
+results
+```
