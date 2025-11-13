@@ -1,0 +1,536 @@
+---
+title: "Mouse_Genetic_Background_And_HPE_Phenotyping_Analysis"
+authour: "Kyle Drover" 
+output: html_document
+---
+
+#Set up and labelling variables
+```{r setup}
+.libPaths("/g/data/nm24/Overt_pheno_rlibs/")
+
+library(data.table)
+library(readr)
+library(readxl)
+library(dplyr)
+library(progress)
+library(DescTools)
+library(ggplot2)
+library(reshape2)
+library(grid)
+library(ggrepel)
+library(forcats)
+library(tidyr)
+library(wesanderson)
+library(ComplexHeatmap)
+library(colorspace)
+library(tidyverse)
+library(tidyr)
+library(ggforce)
+library(cowplot)
+library(ggplot2)
+library(patchwork) 
+library(vcd)
+library(RColorBrewer)
+
+bl6_labels <- c(
+  "0" = "Not C57BL/6",
+  "1" = "Mixed C57BL/6 Background",
+  "2" = "High/Complete C57BL/6 Background"
+)
+
+HPE_labels <- c(
+  "0" = "Non-HPE",
+  "0.5" = "Subtle \nHPE-Associated\nPhenotype",
+  "1" = "Microform HPE",
+  "2" = "Lobar HPE",
+  "3" = "Semilobar HPE",
+  "4" = "Alobar HPE",
+  "5" = "Cyclopia with\nProboscis",
+  "6" = "Forebrain\nTruncation", 
+  "7" = "Early Embryonic Lethality"
+)
+
+
+allele_labels <- c(
+  "0" = "Homozygous Null",
+  "1" = "Homozygous Hypomorph",
+  "2" = "Homozygous Conditional",
+  "3" = "Heterozygous Null",
+  "4" = "Heterozygous Hypomorph"
+)
+
+
+Category_labels <- c(
+  "Major" = "Major Effect HPE Gene",
+  "Minor" = "Minor Effect/Syndromic HPE Gene",
+  "Mouse Only" = "Absent/Non-Reproducible in Human Studies "
+)
+
+Conclusion_labels <- c(
+  "B6_severe" = "B6 Increases \nHPE Severity",
+  "No_change" = "No B6 Effect",
+  "B6_subtle" = "Subtle HPE-like \nPhenotype on B6",
+  "B6_het_sensitive" = "Heterozygous \nHPE on B6",
+  "B6_het_subtle" = "Heterozygous \nSubtle HPE-like \nPhenotype on B6",
+  "B6_sensitive" = "HPE Unique \nto B6"
+)
+
+
+
+```
+
+# Part 1: Analysing HPE permissiveness of the C57BL/6 genome - used to generate Figure 1.16
+
+## Plot counts
+```{r, fig.height=6.25, fig.width=6}
+
+# Reading and Formatting 
+HPE_mouse_dataset <- read.csv("Mouse_Models_Summarised.csv")
+
+# Split variable phenotypes (e.g., models that display embryonic truncation)
+HPE_mouse_dataset <- HPE_mouse_dataset %>%
+  mutate(HPE_Subtype = sapply(strsplit(as.character(HPE_Subtype), ","), function(x) {
+    x_num <- as.numeric(x)
+    if (length(x_num) == 2) {
+      max(x_num, na.rm = TRUE)
+    } else {
+      median(x_num, na.rm = TRUE)
+    }
+  })) %>% filter(HPE_Subtype <7) #removes embryonic lethality
+
+# Count the number of HPE subtypes in differing amounts of the C57BL/6  backgrounds. 
+ggplot(data = na.omit(HPE_mouse_dataset), aes(x = as.factor(HPE_Subtype),fill=as.factor(BL6_Like_doc))) +
+  geom_bar() +
+  facet_wrap(~BL6_Like_doc, ncol=1, labeller = labeller(BL6_Like_doc = bl6_labels)) +
+  #facet_grid(rows = vars(Dosage), cols = vars(BL6_Like_doc)) +
+  xlab("Closest HPE Subtype") +
+  scale_y_continuous(limits=c(0,10), breaks=c(0,2,4,6,8,10))+
+  scale_fill_manual(values = wes_palette("GrandBudapest1", n = 3))+
+  scale_x_discrete(labels =HPE_labels)+
+  ylab("Count")+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        strip.text = element_text(size = 11),
+        legend.position = "none")
+
+
+```
+## Show HPE severity for each mouse model
+
+```{r, fig.height=9.5, fig.width=8}
+
+# Needed for making allelic combinations
+convert_to_expression <- function(labels) {
+  lapply(labels, function(label) {
+    if (grepl("\\^", label)) {
+      parts <- strsplit(label, "\\^")[[1]]
+      bquote(.(parts[1])^.(parts[2]))
+    } else {
+      as.name(label)
+    }
+  })
+}
+
+# just changes new-lines
+HPE_labels <- c(
+  "0" = "Non-HPE",
+  "0.5" = "Subtle HPE-Associated \nPhenotype",
+  "1" = "Microform HPE",
+  "2" = "Lobar HPE",
+  "3" = "Semilobar HPE",
+  "4" = "Alobar HPE",
+  "5" = "Cyclopia with Proboscis",
+  "6" = "Forebrain Truncation", 
+  "7" = "Early Embryonic Lethality"
+)
+
+p<- ggplot(data = HPE_mouse_dataset, aes(x=MouseModel, y = as.factor(HPE_Subtype), 
+                                     colour=as.factor(BL6_Like_doc), shape=as.factor(Dosage)))+
+#ggplot(data = HPE_mouse_dataset, aes(x=interaction(Dosage,GeneSymbol), y = as.factor(HPE_Subtype), 
+#                                     colour=as.factor(BL6_Like_doc), shape=as.factor(Dosage))) +
+  #geom_point()+
+  facet_col(~Category,  # or whatever column defines Major/Minor/etc
+            scales = "free_x",
+            space = "free", labeller = labeller(Category=Category_labels))+
+  geom_point(position=position_dodge2(width=0.5))+
+  #facet_grid(rows = vars(BL6_Like_doc), cols = vars(Category), scales="free_x", space = "free") +
+  labs(x = "Genotype", y="HPE Severity", fill="Tested on Multiple\nGenetic Backgrounds")+ 
+  #scale_y_continuous(limits=c(0,10), breaks=c(0,2,4,6,8,10))+
+  scale_y_discrete(labels=HPE_labels)+
+  guides(fill = guide_legend(nrow = 1), shape = guide_legend(nrow = 1))+
+  scale_x_discrete(labels = function(x) parse(text = convert_to_expression(x)))+
+  scale_colour_manual(values = wes_palette("GrandBudapest1", n = 3), label=bl6_labels)+
+  scale_shape_manual(labels=allele_labels,
+                     values=c("0" = 16,"1" = 17,"2" = 15,"3" = 1,"4" = 2))+
+  labs(x = "Genotype", y="HPE Severity", colour="Genetic Background", shape="Allele Type")+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size=7.5,face="italic"),
+        #axis.text.y = element_text(face="italic"),
+        panel.spacing = unit(0.1, "lines"),
+         legend.text = element_text(size=8),
+        legend.position = "bottom",         # Position inside top-right
+        #legend.justification = c(1, 1),
+        strip.text = element_text(size = 11))
+
+p
+
+```
+## Only Mouse models with more than one instance (i.e., allelic / genetic background combination)
+
+```{r,  fig.height=9.5, fig.width=6}
+ 
+check_allele_instances <- function(Model_per_gene) {
+  allele_list <- lapply(Model_per_gene$MouseModel, function(label) {
+    unique(strsplit(strsplit(label, "\\^")[[1]][2], "/")[[1]])
+  })
+
+  all_alleles <- unlist(allele_list)
+
+  allele_counts <- table(all_alleles)
+
+  binary_list <- lapply(allele_list, function(pair) {
+    any(sapply(pair, function(allele) allele_counts[[allele]] > 1))
+  })
+
+  # Return original data plus new Filter column
+  Model_per_gene$Filter <- unlist(binary_list)
+  return(Model_per_gene)
+}
+
+# Apply per group
+test_v3 <- HPE_mouse_dataset %>%
+  group_by(GeneSymbol) %>%
+  group_modify(~check_allele_instances(.x)) %>%
+  ungroup() %>% filter(Filter==T)
+                      
+ggplot(data = test_v3, aes(x=MouseModel, y = as.factor(HPE_Subtype), 
+                                     colour=as.factor(BL6_Like_doc), shape=as.factor(Dosage)))+
+#ggplot(data = HPE_mouse_dataset, aes(x=interaction(Dosage,GeneSymbol), y = as.factor(HPE_Subtype), 
+#                                     colour=as.factor(BL6_Like_doc), shape=as.factor(Dosage))) +
+  #geom_point()+
+  facet_col(~Category,  # or whatever column defines Major/Minor/etc
+            scales = "free_x",
+            space = "free", labeller = labeller(Category =Category_labels))+
+  geom_point(position=position_dodge2(width=0.5))+
+  #facet_grid(rows = vars(BL6_Like_doc), cols = vars(Category), scales="free_x", space = "free") +
+  xlab("Genotype") +
+  #scale_y_continuous(limits=c(0,10), breaks=c(0,2,4,6,8,10))+
+  scale_y_discrete(labels=HPE_labels)+
+  scale_x_discrete(labels = function(x) parse(text = convert_to_expression(x)))+
+  scale_colour_manual(values = wes_palette("GrandBudapest1", n = 3))+
+  ylab("HPE Severity")+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size=7.5,face="italic"),
+        #axis.text.y = element_text(face="italic"),
+        panel.spacing = unit(0.1, "lines"),
+        strip.text = element_text(size = 11), legend.position = "none")                        
+
+
+```
+## Manually Summarised Data for plotting
+```{r, fig.height=4, fig.width=6.5}
+
+BackDepSum <- read.csv("Back_Dependent_Alleles.csv")
+
+BackDepSum
+
+# Create a new column combining Gene and Allele
+BackDepSum <- BackDepSum %>%
+  mutate(Gene_Allele = paste0("italic(", Gene, ")^italic(\"",Allele, "\")"))
+
+# Plot with text labels
+summary_data <- BackDepSum %>%
+  group_by(Conclusion, Tested, Gene_Allele) %>%
+  summarise(count = n(), .groups = 'drop')
+
+
+# Plot with text labels
+ggplot(data = summary_data, aes(x = Conclusion, fill = Tested, y = count)) +
+  geom_bar(stat = "identity") +
+  #scale_fill_manual(values = wes_palette("GrandBudapest1", n = 3)[1:2]) +  # use scale_fill_manual, not scale_fill_discrete
+  scale_fill_manual(values = c(
+  "Y" = "#E64B35",  # Rich red (strong evidence)
+  "N" = "#FAD4C0"   # Light peach (weak evidence)
+  ), labels=c("No", "Yes"))+
+  geom_text(aes(label = Gene_Allele), parse = TRUE,
+            position = position_stack(vjust = 0.5), 
+            color = "black", size = 2.5, fontface="italic") +
+  labs(x = "Ultimate Allele Evidence", y="Count", fill="Tested on Multiple\nGenetic Backgrounds") +
+  scale_x_discrete(expand = expansion(mult = c(0.1, 0.1)), labels = Conclusion_labels)+
+  scale_y_continuous(breaks=seq(1:7), minor_breaks = NULL, limits=c(0,7))+
+  guides(fill = guide_legend(ncol = 2))+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.title = element_text(size=9),
+        legend.text = element_text(size=8),
+        legend.position = c(0.99, 0.97),         # Position inside top-right
+    legend.justification = c(1, 1),          # Anchor legend by top-right corner
+    legend.background = element_rect(fill = alpha("white", 0.8)))
+
+```
+## Stats
+```{r}
+# Make table
+table_data <- table(HPE_mouse_dataset$HPE_Subtype, HPE_mouse_dataset$BL6_Like_doc)
+
+fisher.test(table_data, simulate.p.value=TRUE)
+
+cor.test(
+  as.numeric(non_lethal$HPE_Subtype),
+  as.numeric(non_lethal$BL6_Like_doc),
+  method = "kendall"
+)
+```
+## Random Plots that aren't that useful
+```{r, fig.height=10, fig.width=10}
+
+tbl <- table(HPE_mouse_dataset$BL6_Like_doc, HPE_mouse_dataset$HPE_Subtype)
+tbl_df <- as.data.frame(tbl)
+colnames(tbl_df) <- c("BL6_Like_doc", "HPE_Subtype", "Count")
+
+# Plot
+ggplot(tbl_df, aes(x = HPE_Subtype, y = BL6_Like_doc, fill = Count)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient(low = "white", high = "steelblue") +
+  labs(x = "HPE Subtype", y = "BL6_like_doc", fill = "Count") +
+  theme_minimal()
+
+
+
+
+# Get the number of HPE subtypes
+HPE_mouse_dataset$HPE_Subtype <- factor(HPE_mouse_dataset$HPE_Subtype)
+HPE_mouse_dataset$HPE_Subtype <- factor(HPE_mouse_dataset$HPE_Subtype,
+                                        levels = rev(sort(unique(HPE_mouse_dataset$HPE_Subtype))))
+
+
+subtypes <- levels(HPE_mouse_dataset$HPE_Subtype)
+n_subtypes <- length(subtypes)
+
+# Generate distinct colors
+colors <- brewer.pal(min(n_subtypes, 8), "Set3")  # If more than 8, expand with another palette
+if (n_subtypes > 8) {
+  colors <- colorRampPalette(brewer.pal(8, "Set3"))(n_subtypes)
+}
+
+# Create the table
+tbl <- table(HPE_mouse_dataset$BL6_Like_doc, HPE_mouse_dataset$HPE_Subtype)
+
+# Draw the mosaic plot
+mosaicplot(tbl,
+           color = colors,
+           main = "Mosaic Plot: HPE_Subtype by BL6_like_doc",
+           xlab = "BL6_Like_doc",
+           ylab = "HPE_Subtype")
+
+```
+# Part 2: Visualising HPE phenotypes across mouse models - used to generate Figure 1.4
+
+```{r, fig.height=19, fig.width=10}
+
+# So multiple phenotypes are in columns with mouse models with variable phenotypes, this code just
+# tidies this all up and makes the acronyms in the columns
+HPE_pheno <- HPE_mouse_dataset %>%  separate_rows(HPE_Hallmarks, sep = "; ") %>% 
+  mutate(HPE_Hallmarks = str_remove_all(HPE_Hallmarks, "\\(Bilateral\\)")) %>% 
+  mutate(HPE_Hallmarks = str_replace_all(HPE_Hallmarks, "Nasal Septum", "NS")) %>%
+  filter(HPE_Hallmarks != "None" & HPE_Hallmarks != "EL")
+
+organ_dict <- c("Olfactory" = "OBs", "Lateral" = "Lat. Vent.", 
+                "Third"="3rd Vent.","Ventral Midline", "Thalamus",
+                "Mono" = "Lat. Vent.","Holo" = "Forebrain", "Hemis" = "Forebrain", 
+                "Phil" = "Philtrum","Hypo"= "Eyes", "phthalmia"="Eyes",
+                "Cleft" = "Palate","Trunc" = "Forebrain", "SMMCI" = "Maxillary", "NS" = "NS",
+                "Lip Groove"= "Philtrum", "Nasal" = "NS", "EL " = "Embryo", "Ventral Midline" = "Thalami",
+                "Prob" = "Forebrain", "Atelence"= "Forebrain","Lethality" = "Embryo",
+                "Absent Septum" = "Septum", "Corpus" = "CC", "Commissure" = "AC", 
+                "Maxillary" = "Maxillary", "Ethmoc" = "Eyes", "Snout"= "Snout",
+                "Skull"="Skull","Vomer"="NS", "Exence" = "Forebrain", "Cyclopia"="Eyes")
+
+simplifier_dict <- c("Absent" = "Absent", "Apophthalmia" = "Absent", "Fused" = "Complete Fusion", 
+                     "Smooth" = "Absent", "Microphthalmia" = "Reduced","Mono"="Complete Fusion",
+                     "Lethality" = "Lethality", "EL" = "Lethality","SMMCI"= "Complete Fusion", "Narrow"="Reduced",
+                     "Lateral Ventricle Fusion"="Complete Fusion", "Atelencephaly"="Absent", "Ethmoc"="Partial Fusion",
+                     "Holosp" = "Complete Fusion", "Cleft"="Cleft", "Single"= "Complete Fusion", "Flattened Upper"="Complete Fusion",
+                     "Cyclopia"="Complete Fusion", "Partial" = "Partial Fusion","Prob"="Complete Fusion",
+                     "Reduced" = "Reduced", "Enlarged"="Enlarged", "Truncation"="Absent", "Shortened"="Reduced")
+
+identify_organ <- function(x) {
+  matches <- names(organ_dict)[sapply(names(organ_dict), function(pattern) {grepl(pattern, x, ignore.case = TRUE)})]
+  if (length(matches) == 0) return(NA)
+  return(as.character(na.omit(unique(organ_dict[matches]))))
+}
+
+# Apply to each row (use sapply for a character vector instead of list of lists)
+HPE_pheno$Organ <- sapply(HPE_pheno$HPE_Hallmarks, identify_organ)
+
+HPE_pheno <- HPE_pheno %>% unnest(Organ)
+
+HPE_pheno$Organ <- as.character(HPE_pheno$Organ)
+
+# Makes a keyword/simplifier dictionary for the colours in the plot that describe a fusion / absence etc. of the organ
+identify_shared_keyword <- function(x) {
+  matches <- names(simplifier_dict)[sapply(names(simplifier_dict), function(pattern) {
+    grepl(pattern, x, ignore.case = TRUE)})]
+  if (length(matches) == 0) return(NA)
+  
+  return(as.character(na.omit(unique(simplifier_dict[matches]))))
+}
+
+# Apply to each row (use sapply for a character vector instead of list of lists)
+HPE_pheno$Keyword <- sapply(HPE_pheno$HPE_Hallmarks, identify_shared_keyword)
+
+HPE_pheno$Keyword <- as.character(HPE_pheno$Keyword)
+
+HPE_pheno
+# manual cleanup
+HPE_pheno <- HPE_pheno %>%
+  unnest(Keyword) %>% 
+  mutate(Keyword=ifelse(HPE_Hallmarks == "Hypotelorism", "NA", Keyword)) %>%
+  mutate(Keyword=ifelse(HPE_Hallmarks == "Atelencephaly", "Absent", Keyword)) %>%
+  mutate(Keyword=ifelse(HPE_Hallmarks == "Partial Lateral Ventricle Fusion", "Partial Fusion", Keyword)) %>%
+  mutate(Keyword=ifelse(HPE_Hallmarks == "Fused Anterior Cerebral Hemispheres", "Partial Fusion", Keyword)) %>%
+  mutate(Keyword=ifelse(HPE_Hallmarks == "Partially Fused Lateral Ventricles", "Partial Fusion", Keyword)) %>%
+  mutate(Keyword=ifelse(HPE_Hallmarks == "Complete/Partial Cerebral Hemisphere Fusion", "Complete/Partial Fusion", Keyword)) %>%
+  mutate(Keyword=ifelse(HPE_Hallmarks == "Partial/Complete Lateral Ventricle Fusion", "Complete/Partial Fusion", Keyword)) %>%
+  mutate(Keyword=ifelse(HPE_Hallmarks == 'c("Complete Fusion", "Partial Fusion")', "Complete/Partial Fusion", Keyword))%>%
+  mutate(Keyword=ifelse(HPE_Hallmarks == "Shortened Nasal Cavity", "Reduced", Keyword)) %>%
+  mutate(Organ=ifelse(HPE_Hallmarks == "Truncated Maxilla", "Maxillary", Organ)) %>%
+  mutate(Keyword=ifelse(HPE_Hallmarks == "Anophthalmia", "Absent", Keyword)) %>%
+  mutate(Keyword=ifelse(HPE_Hallmarks == "Fused/Absent Vomer Bone", "Complete Fusion", Keyword))
+
+#Categorises the keywords
+Keyword_val_mapper <- setNames(
+  c(1, 2, 3, 4, 5, 6, 7,8,9),
+  c("", "Absent", "Complete Fusion", "Complete/Partial Fusion", "Partial Fusion", "Cleft", "Reduced", "Enlarged", "Lethality")
+)
+
+#Creates the matrix of Organ * mouse model, values (i.e., colours) are the keywords
+phenotype_matrix <- HPE_pheno %>%
+  filter(!(is.na(HPE_Hallmarks)|HPE_Hallmarks == "None")) %>%
+  mutate(present = Keyword_val_mapper[as.character(Keyword)]) %>%
+  pivot_wider(names_from = Organ, values_from = present, values_fill = 0) %>%
+  mutate(Allele_Comb = paste(MouseModel, GeneticBackground)) %>%
+  mutate(across(where(is.numeric), ~ replace_na(., 1)))
+
+# Arrange by the HPE-associated category in humans (Major vs Minor vs Mouse Only), followed by allele combination
+row_order <- phenotype_matrix %>%
+  arrange(factor(Category), Allele_Comb) %>%
+  pull(Allele_Comb) 
+
+row_order <- unique(row_order) 
+
+# Combine rows with the same allelic combinations
+phenotype_matrix_collapsed <- phenotype_matrix %>%
+  filter(if_any(where(is.numeric), ~ !is.na(.))) %>%  # Remove rows with all NA numeric values
+  group_by(Allele_Comb) %>%
+  summarise(across(where(is.numeric), max), .groups = "drop")
+
+
+# Set rownames
+phenotype_matrix_final <- phenotype_matrix_collapsed %>%
+  column_to_rownames("Allele_Comb") %>% select(-c(BL6_Like_doc, BL6_Like_ref))%>%
+  .[match(row_order, rownames(.)), ]
+
+# Summarise the thee type of allelic combination (i.e., allelic dosage) and make it the shape in the matrix/heatmap
+shape_mapping <- c("0" = 16,  # Closed circle
+                   "1" = 17,  # Closed triangle
+                   "2" = 15,  # Closed square
+                   "3" = 1,   # Open circle
+                   "4" = 2)   # Open triangle
+shape_values <- unname(shape_mapping[as.character(phenotype_matrix_final$Dosage)])
+
+# drop Allele_Comb column
+phenotype_matrix_final <- phenotype_matrix_final %>% select(-Dosage)
+
+# Include 0 = "None" in legend
+full_vals <- c(0, Keyword_val_mapper)  # add 0 at front
+full_labels <- c("None/Not Reported", names(Keyword_val_mapper))
+full_labels[full_labels == ""] <- "Other"  # or "None" again, if you want
+
+# Create colors
+okabe_ito <- c(
+  "#999999",  # grey
+  "#E69F00",  # orange
+  "#0072B2",  # blue
+  "#56B4E9",  # sky blue
+  "#009E73",  # bluish green
+  "#CC79A7",  # reddish purple
+  "#F0E442",  # yellow
+  "#D55E00",  # vermillion
+  "#000000"   # black (optional 9th color)
+)
+
+#husl_colors <- qualitative_hcl(length(Keyword_val_mapper), palette = "Set 3")
+named_colors <- setNames(c("white", okabe_ito), full_vals)  # 0 = white
+
+# Fix row names:
+original_rownames <- rownames(phenotype_matrix_final)
+
+row_groups <- c(rep("Major", 31), rep("Minor", 13), rep("Mouse_Only", 40))
+
+
+superscriptify <- function(label) {
+  if (str_detect(label, "\\^")) {
+    parts <- str_split(label, "\\^", n = 2)[[1]]
+    gene <- parts[1]
+    rest <- parts[2]
+    
+
+    space_pos <- str_locate(rest, " ")[1]
+    if (!is.na(space_pos)) {
+      super <- substr(rest, 1, space_pos - 1)
+      tail <- substr(rest, space_pos + 1, nchar(rest))
+      return(paste0("italic(", gene, ")^italic(\"", super, "\")~plain(\"", tail, "\")"))
+    } else {
+      return(paste0("italic(", gene, ")^italic(\"", rest, "\")"))
+    }
+  } else {
+    return(paste0("italic(\"", label, "\")"))
+  }
+}
+
+# Apply and parse labels
+fixed_labels <- sapply(original_rownames, superscriptify)
+
+# Now parse for plotting
+parsed_labels <- parse(text = fixed_labels)
+
+# Draw heatmap
+ht <- Heatmap(phenotype_matrix_final,
+        name = "Phenotype Category",
+        col = named_colors,
+        cluster_columns = TRUE,
+        row_labels=parsed_labels,
+        cluster_rows = F,
+        na_col = "grey90",
+        row_split=row_groups,
+        show_row_names = TRUE,
+        show_column_names = TRUE,
+        column_title_side = "bottom",  # Move column title to bottom
+        row_title_side = "left",
+        row_gap = unit(c(1, 1, 1), "cm"),
+        #row_title_gp = gpar(fontface = "bold"),  # Make row title bold
+        column_title_gp = gpar(fontface = "bold"),  # Make column title bold
+        column_names_rot = 30,
+        #row_names_centered = T, 
+        #row_names_rot = -45,
+        show_heatmap_legend = FALSE,
+        row_title_gp = gpar(fontface = "bold"),
+        row_title = "Genotype-Genetic Background Combination",
+        column_title = "Organ/Structure",
+        cell_fun = function(j, i, x, y, width, height, fill) {
+                # Get the preassigned shape value for the current row (i)
+                shape <- shape_values[i]
+                grid.rect(x = x, y = y, width = width, height = height, 
+                          gp = gpar(fill = fill, col = "black", lwd = 0.5))
+                # Draw the shape for the cell
+                if (fill!="#FFFFFFFF"){grid.points(x = x, y = y, pch = shape, gp = gpar(col = "black", cex = 1.2))}
+                if (fill=="#000000FF"){grid.points(x = x, y = y, pch = shape, gp = gpar(col = "white", cex = 1.2))}
+                
+              },
+        heatmap_legend_param = list(at = as.numeric(names(named_colors)),labels = full_labels, border = "black"))
+
+
+draw(ht,
+     heatmap_legend_side = "bottom",   # put legend at the bottom
+     annotation_legend_side = "bottom",
+      padding = unit(c(2, 4, 2, 40), "mm")
+)                # Draw the filled cell behind the shape
+
+```
+

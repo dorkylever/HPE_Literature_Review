@@ -1,0 +1,258 @@
+---
+title: "MTH_Analysis"
+author: "Kyle Drover"
+output: html_document
+---
+
+# Set up and define some functions
+```{r setup}
+.libPaths("/g/data/nm24/Overt_pheno_rlibs/")
+
+library(data.table)
+library(readr)
+library(readxl)
+library(dplyr)
+library(progress)
+library(DescTools)
+library(ggplot2)
+library(reshape2)
+library(grid)
+library(ggrepel)
+library(forcats)
+library(Orthology.eg.db)
+library(org.Mm.eg.db)
+library(org.Hs.eg.db)
+
+if(!require(DescTools)){install.packages("DescTools")}
+
+#library(biomaRt)
+if (!requireNamespace("progress", quietly = TRUE)) {
+  install.packages("progress")
+}
+
+mapfun <- function(mousegenes){
+  gns <- mapIds(org.Mm.eg.db, mousegenes, "ENTREZID", "SYMBOL")
+  mapped <- select(Orthology.eg.db, gns, "Homo_sapiens","Mus_musculus")
+  naind <- is.na(mapped$Homo_sapiens)
+  hsymb <- mapIds(org.Hs.eg.db, as.character(mapped$Homo_sapiens[!naind]), "SYMBOL", "ENTREZID")
+  out <- data.frame(Mouse_symbol = mousegenes, mapped, Human_symbol = NA)
+  out$Human_symbol[!naind] <- hsymb
+  return(out$Human_symbol)
+}
+```
+# Read datasets
+```{r}
+Mouse_Models <- read_csv("HDisease_MModel.csv")
+
+test <- Mouse_Models %>% filter()
+Human_Genes_and_Diseases <- read_csv("HGene_HDisease.csv")
+diseases_for_HP_0000006_AD <- read_excel("diseases_for_HP_0000006_AD.xlsx")
+diseases_for_HP_0000007_AR <- read_excel("diseases_for_HP_0000007_AR.xlsx")
+diseases_for_HP_0001419_XLR <- read_excel("diseases_for_HP_0001419_XLR.xlsx")
+diseases_for_HP_0001423_XLD <- read_excel("diseases_for_HP_0001423_XLD.xlsx")
+
+# Prepare data - i.e. only get rows where the synonmym is an OMIM ID
+Mouse_Models <- subset(Mouse_Models, grepl("^OMIM", OntologyAnnotation.ontologyTerm.synonyms.name))
+Human_Genes_OMIM <- subset(Human_Genes_and_Diseases, grepl("^OMIM", Gene.ontologyAnnotations.ontologyTerm.synonyms.name))
+```
+
+# Perform the filter to get the mouse models with the desired inheritance pattern
+```{r}
+Filter_by_Human_Inheritance <- function(Hum_Genes, Mouse_Data, Hum_Inheritance_Data, same_gene_in_man){
+  # Get shared OMIM numbers between Hum_Genes and Inheritance Data and filter
+  intersection_human_disease_names <-  dplyr::intersect(Hum_Genes$Gene.ontologyAnnotations.ontologyTerm.synonyms.name, Hum_Inheritance_Data$DISEASE_ID)
+  
+  Human_Inh_genes <- Hum_Genes[Hum_Genes$Gene.ontologyAnnotations.ontologyTerm.synonyms.name %in% intersection_human_disease_names,]
+
+  
+  # Now get shared DOIDs between Human Genes and Mouse Models
+  
+  Hum_Mouse_intersection <-dplyr::intersect(Human_Inh_genes$Gene.ontologyAnnotations.ontologyTerm.identifier, Mouse_Data$OntologyAnnotation.ontologyTerm.identifier)
+  
+  # Filter for human genes where there is a mouse  model of the diseases
+  
+  Human_Inh_genes_with_MM <- Human_Inh_genes[Human_Inh_genes$Gene.ontologyAnnotations.ontologyTerm.identifier %in% Hum_Mouse_intersection,]
+
+  
+  # Filter Mouse_Models using the intersected disease names
+  filtered_Mouse_Models <- Mouse_Data[Mouse_Data$OntologyAnnotation.ontologyTerm.identifier %in% Hum_Mouse_intersection, ] %>% 
+    distinct(OntologyAnnotation.ontologyTerm.identifier, OntologyAnnotation.subject.symbol, OntologyAnnotation.subject.background.name, .keep_all = T)
+  
+  #stuff it  - let's just do the thing
+  
+  if (same_gene_in_man){
+    #pb <- progress_bar$new(total = length(filtered_Mouse_Models$OntologyAnnotation.subject.alleles.feature.symbol))
+    
+    filtered_Mouse_Models$HGNC_Symbol <- mapfun(filtered_Mouse_Models$OntologyAnnotation.subject.alleles.feature.symbol)
+    #pb$terminate()
+    
+    # reshape HGNC_symbol
+    for (i in seq_along(filtered_Mouse_Models$HGNC_Symbol)) {
+      filtered_Mouse_Models$HGNC_Symbol[[i]] <- gsub("[<>]", "", filtered_Mouse_Models$HGNC_Symbol[[i]][1])
+    }
+
+    
+    Hum_sub <- Human_Inh_genes_with_MM %>% dplyr::select(Gene.symbol, Gene.ontologyAnnotations.ontologyTerm.identifier)
+    
+    
+    
+    final_dataset <- inner_join(filtered_Mouse_Models, Hum_sub, 
+                              by = c("HGNC_Symbol" = "Gene.symbol",
+                                     "OntologyAnnotation.ontologyTerm.identifier" = "Gene.ontologyAnnotations.ontologyTerm.identifier"))
+    
+    print(final_dataset)
+    
+    return(final_dataset)
+    
+  }
+  else{
+    return(filtered_Mouse_Models)
+  }
+  
+  
+  
+  
+  # Split dataset into different conditions
+  
+  
+  # so that that we have our data split, convert the MGI symbol to Human HGNC and make sure that that it's in the human gene list (for that inheritance model)
+  
+  
+}
+
+filtered_Mouse_Models_AD <- Filter_by_Human_Inheritance(Human_Genes_OMIM, Mouse_Models, diseases_for_HP_0000006_AD, TRUE)
+
+
+filtered_Mouse_Models_AR <- Filter_by_Human_Inheritance(Human_Genes_OMIM, Mouse_Models, diseases_for_HP_0000007_AR, TRUE) 
+
+filtered_Mouse_Models_XLR <- Filter_by_Human_Inheritance(Human_Genes_OMIM, Mouse_Models, diseases_for_HP_0001419_XLR, TRUE)
+
+
+filtered_Mouse_Models_XLD <- Filter_by_Human_Inheritance(Human_Genes_OMIM, Mouse_Models, diseases_for_HP_0001423_XLD, TRUE)
+```
+
+# Create confusion matrix - used to generate Figure 1.18
+
+```{r, fig.height=3.4, fig.width=4.9}
+
+Create_Confusion_Matrix <- function(AD_data, AR_data){
+  
+  AR_subsets <- split(AR_data, AR_data$OntologyAnnotation.subject.zygosity)
+  AR_summary <- lapply(AR_subsets, function(subset) nrow(subset))
+  
+  AD_subsets <- split(AD_data, AD_data$OntologyAnnotation.subject.zygosity)
+  AD_summary <- lapply(AD_subsets, function(subset) nrow(subset))
+  
+  AR_df <- data.frame(Zygosity = names(AR_summary), AR_Count = unlist(AR_summary))
+  AD_df <- data.frame(Zygosity = names(AD_summary), AD_Count = unlist(AD_summary))
+  
+  # Merge the two data frames based on Zygosity
+  combined_df <- merge(AR_df, AD_df, by = "Zygosity", all = TRUE)
+  
+  colnames(combined_df) <- c("Mouse_Zygosity", "Human_AR", "Human_AD")
+  str(combined_df)
+  
+  melted_df <- melt(combined_df, id.vars = "Mouse_Zygosity",
+                    measure.vars = c("Human_AR", "Human_AD"),
+                    variable.name = "Human_Category",
+                    value.name = "Count")
+  
+  dotplot <- ggplot(melted_df, aes(x = Mouse_Zygosity, y = Human_Category, size = Count, color=Human_Category)) +
+    geom_point() +
+    labs(title = "Dot Plot of Mouse Zygosity across Human AR and AD",
+         x = "Mouse Zygosity", y = "Human Inheritance") +
+    scale_size_continuous(range = c(1, 10)) +  # Adjust the range as needed
+    theme_minimal()
+  # Print the dot plot
+  print(dotplot)
+  
+  subset_df <- combined_df[combined_df$Mouse_Zygosity %in% c("ht", "hm"), ]
+  
+  print(subset_df)
+  
+  
+  # Create the confusion matrix
+  # Create the confusion matrix manually
+  
+  # Print the confusion matrix
+  subset_matrix <- as.matrix(subset_df[, c("Human_AR", "Human_AD")])
+  
+  print(subset_matrix)
+  
+  # Create the confusion matrix
+  confusion_matrix <- subset_matrix
+  rownames(confusion_matrix) <- c("AR", "AD")
+  colnames(confusion_matrix) <- c("AR", "AD")
+  # Print the confusion matrix
+  print(confusion_matrix)
+  
+  confusion_matrix_normalized <-  sweep(confusion_matrix,2,colSums(confusion_matrix),`/`) * 100
+  
+  print(confusion_matrix_normalized)
+  
+  melted_confusion_matrix <- melt(confusion_matrix_normalized)
+  melted_confusion_matrix$percentage <- melted_confusion_matrix$value
+  melted_confusion_matrix$formatted_label <- lapply(seq_len(nrow(melted_confusion_matrix)), function(i) {
+    paste(melt(confusion_matrix)$value[i],
+          " (", sprintf("%.2f%%", melted_confusion_matrix$percentage[i]), ")", sep = "")
+  })
+  melted_confusion_matrix$HPE_label <- c(0, 0, 6, 2)
+  
+  confusion_matrix_plot <- ggplot(melted_confusion_matrix, aes(x = Var1, y = Var2)) +
+    geom_tile(aes(fill = value), color = "white") +
+    geom_text(aes(x = Var1, y = Var2, label = formatted_label), vjust = -0.5, hjust = 0.5, size = 5)+
+    geom_text_repel(aes(x = Var1, y = Var2, label = HPE_label), vjust = 1.5, hjust = 0.5, size = 5, color = "#B17359")+
+    scale_fill_gradient(low="white", high="#009194", limits = c(0, 100), 
+                        guide = guide_colorbar(title.position = "left",title.theme = element_text(angle = 90, size = 14)))+
+    scale_x_discrete(limits = c("AD","AR"))+
+    labs(title = "",
+         x = "Mouse Inheritance Pattern",
+         y = "Human Inheritance Pattern", 
+         fill = "Frequency (%)")+
+    theme(axis.title.x = element_text(size = 14, face="bold"),  # Adjust the font size for the x-axis label
+          axis.title.y = element_text(size = 14, face="bold"),
+          axis.text.x = element_text(size = 12),  # Adjust the font size for x-axis tick labels
+          axis.text.y = element_text(size = 12), 
+          legend.title = element_text(size = 14, face="bold"), 
+          legend.text = element_text(size = 12),
+          legend.position = "right")+  # Adjust the font size for the y-axis label
+    geom_point(
+    data = data.frame(Var1 = "AR", Var2 = "AD"),
+    aes(x = Var1, y = Var2),
+    shape = 21,         # circle shape with border
+    color = "red",      # border color
+    fill = NA,          # transparent fill
+    size = 42,          # size of the circle
+    stroke = 1.5        # border thickness
+  )
+
+    
+  
+  # Print the confusion matrix plot
+  print(confusion_matrix_plot)
+  
+  
+  
+  #final_bit_is stat time!
+  #get rowsums for expected_values
+  
+  rowSumA <- sum(confusion_matrix[1, ])
+  rowSumB <- sum(confusion_matrix[2, ])
+  
+  expected_matrix <- matrix(c(0, rowSumA, rowSumB, 0), nrow = 2, byrow = TRUE)
+  
+  #result <- chisq.test(confusion_matrix, p = expected_matrix, correct = FALSE)  # Set correct = FALSE if you don't want Yates' continuity correction
+  
+  GTest(x=confusion_matrix,
+          p=expected__matrix,
+          correct="none")  
+  
+  # Print the result
+  
+}
+
+Create_Confusion_Matrix(filtered_Mouse_Models_XLD, filtered_Mouse_Models_XLR)
+
+Create_Confusion_Matrix(filtered_Mouse_Models_AD, filtered_Mouse_Models_AR)
+
+```
